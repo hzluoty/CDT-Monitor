@@ -705,3 +705,30 @@ func TestOpenWithEnvDatabaseURLAndMasterKeyDoesNotCreateDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExternalDatabasePersistsMasterKeyInSettingsAcrossColdStarts(t *testing.T) {
+	dbDir := t.TempDir()
+	dbFile := filepath.Join(dbDir, "turso-sim.sqlite")
+	t.Setenv("CDT_DATABASE_URL", dbFile)
+	t.Setenv("CDT_MASTER_KEY", "")
+
+	first, err := Open(filepath.Join(t.TempDir(), "ephemeral-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := first.Encrypt("aliyun-access-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+
+	second, err := Open(filepath.Join(t.TempDir(), "ephemeral-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	plaintext, err := second.Decrypt(ciphertext)
+	if err != nil || plaintext != "aliyun-access-secret" {
+		t.Fatalf("decrypt after cold start = %q, err = %v", plaintext, err)
+	}
+}

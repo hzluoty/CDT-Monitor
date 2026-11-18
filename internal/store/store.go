@@ -24,14 +24,10 @@ type Store struct {
 
 func Open(dataDir string) (*Store, error) {
 	driver, dsn, externalDSN := resolveDatabaseConfig(dataDir)
-	if !externalDSN || !security.HasEnvMasterKey() {
+	if !externalDSN {
 		if err := os.MkdirAll(dataDir, 0o750); err != nil {
 			return nil, fmt.Errorf("create data directory: %w", err)
 		}
-	}
-	cipher, err := security.LoadOrCreateCipher(dataDir)
-	if err != nil {
-		return nil, err
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
@@ -51,21 +47,77 @@ func Open(dataDir string) (*Store, error) {
 				return nil, fmt.Errorf("configure sqlite: %w", err)
 			}
 		}
+	} else {
+		db.SetMaxOpenConns(4)
+		db.SetMaxIdleConns(2)
+		db.SetConnMaxIdleTime(15 * time.Second)
+		db.SetConnMaxLifetime(2 * time.Minute)
 	}
+
+	var cipher *security.Cipher
+	if !externalDSN || security.HasEnvMasterKey() {
+		cipher, err = security.LoadOrCreateCipher(dataDir)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+
 	s := &Store{db: db, cipher: cipher, dataDir: dataDir}
-	if err = s.Migrate(context.Background()); err != nil {
-		db.Close()
-		return nil, err
+	ctx := context.Background()
+	alreadyMigrated := s.isSchemaCurrent(ctx)
+	if !alreadyMigrated {
+		if err = s.Migrate(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
-	if err = s.migratePlaintextSecrets(context.Background()); err != nil {
-		db.Close()
-		return nil, err
+	if s.cipher == nil {
+		cipher, err = s.loadOrCreateDBMasterKey(ctx)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		s.cipher = cipher
 	}
-	if err = s.recoverInterruptedWork(context.Background()); err != nil {
+	if !alreadyMigrated {
+		if err = s.migratePlaintextSecrets(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		_, _ = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, unixepoch())`)
+	}
+	if err = s.recoverInterruptedWork(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func (s *Store) isSchemaCurrent(ctx context.Context) bool {
+	var version int
+	err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_migrations WHERE version=2`).Scan(&version)
+	return err == nil && version == 2
+}
+
+func (s *Store) loadOrCreateDBMasterKey(ctx context.Context) (*security.Cipher, error) {
+	var stored string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='system_master_key'`).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) || strings.TrimSpace(stored) == "" {
+		generated, genErr := security.GenerateMasterKey()
+		if genErr != nil {
+			return nil, genErr
+		}
+		if _, execErr := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES('system_master_key',?) ON CONFLICT(key) DO NOTHING`, generated); execErr != nil {
+			return nil, fmt.Errorf("persist database master key: %w", execErr)
+		}
+		if err = s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='system_master_key'`).Scan(&stored); err != nil {
+			return nil, fmt.Errorf("load database master key: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("query database master key: %w", err)
+	}
+	return security.NewCipherFromKey(stored)
 }
 
 func resolveDatabaseConfig(dataDir string) (driver string, dsn string, externalDSN bool) {
