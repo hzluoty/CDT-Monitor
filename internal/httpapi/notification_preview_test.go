@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hzluoty/CDT-Monitor/internal/aliyun"
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
-	"github.com/hzluoty/CDT-Monitor/internal/engine"
-	"github.com/hzluoty/CDT-Monitor/internal/notify"
-	"github.com/hzluoty/CDT-Monitor/internal/store"
+	"handler/internal/aliyun"
+	"handler/internal/domain"
+	"handler/internal/engine"
+	"handler/internal/notify"
+	"handler/internal/store"
 )
 
 func TestNotificationPreviewUsesUnsavedWebhookWithoutPersisting(t *testing.T) {

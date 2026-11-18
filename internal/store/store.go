@@ -12,7 +12,7 @@ import (
 	"time"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
-	"github.com/hzluoty/CDT-Monitor/internal/security"
+	"handler/internal/security"
 	_ "modernc.org/sqlite"
 )
 

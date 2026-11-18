@@ -16,12 +16,12 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/hzluoty/CDT-Monitor/internal/aliyun"
-	"github.com/hzluoty/CDT-Monitor/internal/engine"
-	"github.com/hzluoty/CDT-Monitor/internal/httpapi"
-	"github.com/hzluoty/CDT-Monitor/internal/notify"
-	"github.com/hzluoty/CDT-Monitor/internal/store"
-	"github.com/hzluoty/CDT-Monitor/internal/web"
+	"handler/internal/aliyun"
+	"handler/internal/engine"
+	"handler/internal/httpapi"
+	"handler/internal/notify"
+	"handler/internal/store"
+	"handler/internal/web"
 )
 
 var (

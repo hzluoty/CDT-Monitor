@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/hzluoty/CDT-Monitor/internal/security"
+	"handler/internal/security"
 )
 
 // schema contains top-level DDL statements executed sequentially via splitSQLStatements.

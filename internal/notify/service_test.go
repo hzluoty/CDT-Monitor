@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"handler/internal/domain"
 )
 
 func TestReplacementsExposeWebhookVariables(t *testing.T) {

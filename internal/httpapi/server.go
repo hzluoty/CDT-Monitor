@@ -21,11 +21,11 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
-	"github.com/hzluoty/CDT-Monitor/internal/engine"
-	"github.com/hzluoty/CDT-Monitor/internal/scheduler"
-	"github.com/hzluoty/CDT-Monitor/internal/security"
-	"github.com/hzluoty/CDT-Monitor/internal/store"
+	"handler/internal/domain"
+	"handler/internal/engine"
+	"handler/internal/scheduler"
+	"handler/internal/security"
+	"handler/internal/store"
 )
 
 type principal struct {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"handler/internal/domain"
 )
 
 func TestTrafficClass(t *testing.T) {

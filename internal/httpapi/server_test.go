@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
-	"github.com/hzluoty/CDT-Monitor/internal/engine"
-	"github.com/hzluoty/CDT-Monitor/internal/store"
+	"handler/internal/domain"
+	"handler/internal/engine"
+	"handler/internal/store"
 )
 
 func TestSecurityHeadersAllowFaviconEndpoint(t *testing.T) {

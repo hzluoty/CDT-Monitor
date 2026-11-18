@@ -1,0 +1,6 @@
+Dockerfile
+docker-compose.yml
+android-widget/
+docs/
+cmd/
+**/*_test.go

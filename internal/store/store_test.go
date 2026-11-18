@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
-	"github.com/hzluoty/CDT-Monitor/internal/security"
+	"handler/internal/domain"
+	"handler/internal/security"
 	_ "modernc.org/sqlite"
 )
 

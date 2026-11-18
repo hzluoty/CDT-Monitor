@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"handler/internal/domain"
 )
 
 type Provider interface {

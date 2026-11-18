@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hzluoty/CDT-Monitor/internal/aliyun"
-	"github.com/hzluoty/CDT-Monitor/internal/domain"
-	"github.com/hzluoty/CDT-Monitor/internal/notify"
-	"github.com/hzluoty/CDT-Monitor/internal/scheduler"
-	"github.com/hzluoty/CDT-Monitor/internal/security"
-	"github.com/hzluoty/CDT-Monitor/internal/store"
+	"handler/internal/aliyun"
+	"handler/internal/domain"
+	"handler/internal/notify"
+	"handler/internal/scheduler"
+	"handler/internal/security"
+	"handler/internal/store"
 )
 
 const (
