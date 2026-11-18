@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/notify"
-	"github.com/wang4386/CDT-Monitor/internal/store"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/notify"
+	"github.com/hzluoty/CDT-Monitor/internal/store"
 )
 
 func TestDueWithinSupportsLateScheduler(t *testing.T) {

@@ -16,12 +16,12 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/wang4386/CDT-Monitor/internal/aliyun"
-	"github.com/wang4386/CDT-Monitor/internal/engine"
-	"github.com/wang4386/CDT-Monitor/internal/httpapi"
-	"github.com/wang4386/CDT-Monitor/internal/notify"
-	"github.com/wang4386/CDT-Monitor/internal/store"
-	"github.com/wang4386/CDT-Monitor/internal/web"
+	"github.com/hzluoty/CDT-Monitor/internal/aliyun"
+	"github.com/hzluoty/CDT-Monitor/internal/engine"
+	"github.com/hzluoty/CDT-Monitor/internal/httpapi"
+	"github.com/hzluoty/CDT-Monitor/internal/notify"
+	"github.com/hzluoty/CDT-Monitor/internal/store"
+	"github.com/hzluoty/CDT-Monitor/internal/web"
 )
 
 var (

@@ -1,15 +1,19 @@
-module github.com/wang4386/CDT-Monitor
+module github.com/hzluoty/CDT-Monitor
 
 go 1.24.0
 
 require (
 	github.com/go-webauthn/webauthn v0.13.4
+	github.com/robfig/cron/v3 v3.0.1
+	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
 	golang.org/x/crypto v0.40.0
 	golang.org/x/net v0.41.0
 	modernc.org/sqlite v1.37.1
 )
 
 require (
+	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
+	github.com/coder/websocket v1.8.12 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-webauthn/x v0.1.23 // indirect
@@ -20,7 +24,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/sys v0.34.0 // indirect

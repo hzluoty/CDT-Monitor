@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wang4386/CDT-Monitor/internal/aliyun"
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/notify"
-	"github.com/wang4386/CDT-Monitor/internal/scheduler"
-	"github.com/wang4386/CDT-Monitor/internal/security"
-	"github.com/wang4386/CDT-Monitor/internal/store"
+	"github.com/hzluoty/CDT-Monitor/internal/aliyun"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/notify"
+	"github.com/hzluoty/CDT-Monitor/internal/scheduler"
+	"github.com/hzluoty/CDT-Monitor/internal/security"
+	"github.com/hzluoty/CDT-Monitor/internal/store"
 )
 
 const (
@@ -156,6 +156,49 @@ func (e *Engine) enqueueMonitorCycle(ctx context.Context, now time.Time) error {
 	return e.store.SetLastMonitorRun(ctx, now.UTC())
 }
 
+func (e *Engine) DrainSync(ctx context.Context) {
+	drainCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+	defer cancel()
+	workers := e.workers
+	if workers < 1 {
+		workers = 1
+	}
+	if workers == 1 {
+		e.drainJobs(drainCtx, 0)
+	} else {
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				e.drainJobs(drainCtx, index)
+			}(i)
+		}
+		wg.Wait()
+	}
+	e.drainNotifications(drainCtx)
+}
+
+func (e *Engine) drainJobs(ctx context.Context, index int) {
+	for {
+		job, err := e.store.ClaimJob(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			e.logger.Error("claim job", "worker", index, "error", err)
+			break
+		}
+		result, runErr := e.runJob(ctx, job)
+		if runErr != nil {
+			e.logger.Warn("job failed", "job_id", job.ID, "type", job.Type, "error", runErr)
+			_ = e.store.FailJob(ctx, job, runErr)
+			continue
+		}
+		_ = e.store.CompleteJob(ctx, job.ID, result)
+	}
+}
+
 func (e *Engine) worker(ctx context.Context, index int) {
 	ticker := time.NewTicker(800 * time.Millisecond)
 	defer ticker.Stop()
@@ -166,23 +209,7 @@ func (e *Engine) worker(ctx context.Context, index int) {
 		case <-e.wake:
 		case <-ticker.C:
 		}
-		for {
-			job, err := e.store.ClaimJob(ctx)
-			if errors.Is(err, sql.ErrNoRows) {
-				break
-			}
-			if err != nil {
-				e.logger.Error("claim job", "worker", index, "error", err)
-				break
-			}
-			result, runErr := e.runJob(ctx, job)
-			if runErr != nil {
-				e.logger.Warn("job failed", "job_id", job.ID, "type", job.Type, "error", runErr)
-				_ = e.store.FailJob(ctx, job, runErr)
-				continue
-			}
-			_ = e.store.CompleteJob(ctx, job.ID, result)
-		}
+		e.drainJobs(ctx, index)
 	}
 }
 
@@ -642,6 +669,34 @@ func (e *Engine) refreshBilling(ctx context.Context, account domain.Account, sec
 	return nil
 }
 
+func (e *Engine) drainNotifications(ctx context.Context) {
+	for {
+		item, err := e.store.ClaimOutbox(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			e.logger.Error("claim notification", "error", err)
+			break
+		}
+		var event domain.NotificationEvent
+		if err = json.Unmarshal([]byte(item.Payload), &event); err == nil {
+			var config domain.Config
+			config, err = e.store.GetConfig(ctx)
+			if err == nil {
+				sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				err = e.notify.Send(sendCtx, item.Channel, event, config)
+				cancel()
+			}
+		}
+		if err != nil {
+			_ = e.store.FailOutbox(ctx, item, err)
+			continue
+		}
+		_ = e.store.CompleteOutbox(ctx, item.ID)
+	}
+}
+
 func (e *Engine) notificationWorker(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -650,31 +705,7 @@ func (e *Engine) notificationWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for {
-				item, err := e.store.ClaimOutbox(ctx)
-				if errors.Is(err, sql.ErrNoRows) {
-					break
-				}
-				if err != nil {
-					e.logger.Error("claim notification", "error", err)
-					break
-				}
-				var event domain.NotificationEvent
-				if err = json.Unmarshal([]byte(item.Payload), &event); err == nil {
-					var config domain.Config
-					config, err = e.store.GetConfig(ctx)
-					if err == nil {
-						sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-						err = e.notify.Send(sendCtx, item.Channel, event, config)
-						cancel()
-					}
-				}
-				if err != nil {
-					_ = e.store.FailOutbox(ctx, item, err)
-					continue
-				}
-				_ = e.store.CompleteOutbox(ctx, item.ID)
-			}
+			e.drainNotifications(ctx)
 		}
 	}
 }

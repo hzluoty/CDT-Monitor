@@ -1,0 +1,32 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd web && npm install && npm run build",
+  "outputDirectory": "internal/web/dist",
+  "functions": {
+    "api/index.go": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.go"
+    },
+    {
+      "source": "/monitor.php",
+      "destination": "/api/index.go"
+    },
+    {
+      "source": "/healthz",
+      "destination": "/api/index.go"
+    },
+    {
+      "source": "/readyz",
+      "destination": "/api/index.go"
+    },
+    {
+      "source": "/((?!api/|assets/|icon\\.png|theme-init\\.js).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

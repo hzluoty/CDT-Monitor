@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/security"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/security"
 )
 
 func (s *Store) AddLog(ctx context.Context, logType, message string) error {
@@ -61,7 +61,7 @@ func (s *Store) ClearLogs(ctx context.Context, tab string) error {
 }
 
 func (s *Store) Prune(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	return execStatements(ctx, s.db, `
 DELETE FROM logs WHERE (type='heartbeat' AND created_at<unixepoch()-259200) OR (type!='heartbeat' AND created_at<unixepoch()-2592000);
 DELETE FROM traffic_hourly WHERE recorded_at<unixepoch()-172800;
 DELETE FROM traffic_daily WHERE recorded_at<unixepoch()-5184000;
@@ -71,8 +71,8 @@ DELETE FROM login_attempts WHERE attempt_time<unixepoch()-86400;
 DELETE FROM jobs WHERE status IN ('completed','failed') AND updated_at<unixepoch()-604800;
 DELETE FROM notification_outbox WHERE status IN ('sent','failed') AND updated_at<unixepoch()-2592000;
 DELETE FROM daily_traffic_snapshots WHERE updated_at<unixepoch()-2592000;
+DELETE FROM action_events WHERE updated_at<unixepoch()-2592000;
 `)
-	return err
 }
 
 type TrafficSnapshot struct {
@@ -243,26 +243,19 @@ func (s *Store) GetJob(ctx context.Context, id string) (domain.Job, error) {
 
 func (s *Store) ClaimJob(ctx context.Context) (domain.Job, error) {
 	var job domain.Job
-	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		var available, created, updated int64
-		err := tx.QueryRowContext(ctx, `SELECT id,type,account_id,payload,status,result,error,attempts,max_attempts,available_at,created_at,updated_at FROM jobs WHERE status='queued' AND available_at<=unixepoch() ORDER BY created_at LIMIT 1`).
-			Scan(&job.ID, &job.Type, &job.AccountID, &job.Payload, &job.Status, &job.Result, &job.Error, &job.Attempts, &job.MaxAttempts, &available, &created, &updated)
-		if err != nil {
-			return err
-		}
-		result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='running',locked_at=unixepoch(),attempts=attempts+1,updated_at=unixepoch() WHERE id=? AND status='queued'`, job.ID)
-		if err != nil {
-			return err
-		}
-		count, _ := result.RowsAffected()
-		if count != 1 {
-			return sql.ErrNoRows
-		}
-		job.Status, job.Attempts = "running", job.Attempts+1
-		job.AvailableAt, job.CreatedAt, job.UpdatedAt = time.Unix(available, 0).UTC(), time.Unix(created, 0).UTC(), time.Now().UTC()
-		return nil
-	})
-	return job, err
+	var available, created, updated int64
+	err := s.db.QueryRowContext(ctx, `
+UPDATE jobs
+SET status='running', locked_at=unixepoch(), attempts=attempts+1, updated_at=unixepoch()
+WHERE id=(SELECT id FROM jobs WHERE status='queued' AND available_at<=unixepoch() ORDER BY created_at LIMIT 1)
+  AND status='queued'
+RETURNING id,type,account_id,payload,status,result,error,attempts,max_attempts,available_at,created_at,updated_at`).
+		Scan(&job.ID, &job.Type, &job.AccountID, &job.Payload, &job.Status, &job.Result, &job.Error, &job.Attempts, &job.MaxAttempts, &available, &created, &updated)
+	if err != nil {
+		return domain.Job{}, err
+	}
+	job.AvailableAt, job.CreatedAt, job.UpdatedAt = time.Unix(available, 0).UTC(), time.Unix(created, 0).UTC(), time.Unix(updated, 0).UTC()
+	return job, nil
 }
 
 func (s *Store) CompleteJob(ctx context.Context, id, result string) error {
@@ -330,22 +323,17 @@ type OutboxItem struct {
 
 func (s *Store) ClaimOutbox(ctx context.Context) (OutboxItem, error) {
 	var item OutboxItem
-	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `SELECT id,channel,payload,attempts,max_attempts FROM notification_outbox WHERE status='queued' AND available_at<=unixepoch() ORDER BY created_at LIMIT 1`).Scan(&item.ID, &item.Channel, &item.Payload, &item.Attempts, &item.MaxAttempts); err != nil {
-			return err
-		}
-		result, err := tx.ExecContext(ctx, `UPDATE notification_outbox SET status='sending',attempts=attempts+1,updated_at=unixepoch() WHERE id=? AND status='queued'`, item.ID)
-		if err != nil {
-			return err
-		}
-		count, _ := result.RowsAffected()
-		if count != 1 {
-			return sql.ErrNoRows
-		}
-		item.Attempts++
-		return nil
-	})
-	return item, err
+	err := s.db.QueryRowContext(ctx, `
+UPDATE notification_outbox
+SET status='sending', attempts=attempts+1, updated_at=unixepoch()
+WHERE id=(SELECT id FROM notification_outbox WHERE status='queued' AND available_at<=unixepoch() ORDER BY created_at LIMIT 1)
+  AND status='queued'
+RETURNING id,channel,payload,attempts,max_attempts`).
+		Scan(&item.ID, &item.Channel, &item.Payload, &item.Attempts, &item.MaxAttempts)
+	if err != nil {
+		return OutboxItem{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) CompleteOutbox(ctx context.Context, id string) error {

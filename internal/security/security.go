@@ -22,23 +22,30 @@ type Cipher struct {
 	aead cipher.AEAD
 }
 
-func LoadOrCreateCipher(dataDir string) (*Cipher, error) {
-	path := filepath.Join(dataDir, "master.key")
-	key, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		key = make([]byte, 32)
-		if _, err = rand.Read(key); err != nil {
-			return nil, fmt.Errorf("generate master key: %w", err)
-		}
-		if err = os.WriteFile(path, []byte(base64.RawURLEncoding.EncodeToString(key)), 0o600); err != nil {
-			return nil, fmt.Errorf("write master key: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("read master key: %w", err)
-	}
+func HasEnvMasterKey() bool {
+	return strings.TrimSpace(os.Getenv("CDT_MASTER_KEY")) != ""
+}
 
-	if decoded, decodeErr := base64.RawURLEncoding.DecodeString(strings.TrimSpace(string(key))); decodeErr == nil {
-		key = decoded
+func LoadOrCreateCipher(dataDir string) (*Cipher, error) {
+	var key []byte
+	if envKey := strings.TrimSpace(os.Getenv("CDT_MASTER_KEY")); envKey != "" {
+		key = decodeMasterKey([]byte(envKey))
+	} else {
+		path := filepath.Join(dataDir, "master.key")
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			key = make([]byte, 32)
+			if _, err = rand.Read(key); err != nil {
+				return nil, fmt.Errorf("generate master key: %w", err)
+			}
+			if err = os.WriteFile(path, []byte(base64.RawURLEncoding.EncodeToString(key)), 0o600); err != nil {
+				return nil, fmt.Errorf("write master key: %w", err)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("read master key: %w", err)
+		} else {
+			key = decodeMasterKey(raw)
+		}
 	}
 	if len(key) != 32 {
 		return nil, fmt.Errorf("master key must contain 32 bytes")
@@ -52,6 +59,21 @@ func LoadOrCreateCipher(dataDir string) (*Cipher, error) {
 		return nil, err
 	}
 	return &Cipher{aead: aead}, nil
+}
+
+func decodeMasterKey(raw []byte) []byte {
+	trimmed := strings.TrimSpace(string(raw))
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	} {
+		if decoded, err := enc.DecodeString(trimmed); err == nil && len(decoded) == 32 {
+			return decoded
+		}
+	}
+	return []byte(trimmed)
 }
 
 func (c *Cipher) Encrypt(plaintext string) (string, error) {

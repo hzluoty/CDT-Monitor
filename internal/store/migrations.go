@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/wang4386/CDT-Monitor/internal/security"
+	"github.com/hzluoty/CDT-Monitor/internal/security"
 )
 
+// schema contains top-level DDL statements executed sequentially via splitSQLStatements.
+// Do not include multi-statement CREATE TRIGGER ... BEGIN ... END blocks here.
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -160,7 +162,7 @@ CREATE TABLE IF NOT EXISTS daily_traffic_snapshots (
 `
 
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+	if err := execStatements(ctx, s.db, schema); err != nil {
 		return fmt.Errorf("apply base schema: %w", err)
 	}
 	for _, col := range []struct{ name, definition string }{

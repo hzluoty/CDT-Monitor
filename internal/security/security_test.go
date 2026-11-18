@@ -1,6 +1,7 @@
 package security
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,5 +51,33 @@ func TestCipherPersistsMasterKey(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, "master.key"))
 	if err != nil || info.Size() == 0 {
 		t.Fatal("master key was not persisted")
+	}
+}
+
+func TestCipherLoadsMasterKeyFromEnvWithoutTouchingDisk(t *testing.T) {
+	rawKey := []byte("0123456789abcdef0123456789abcdef")
+	t.Setenv("CDT_MASTER_KEY", base64.StdEncoding.EncodeToString(rawKey))
+	dir := filepath.Join(t.TempDir(), "nonexistent")
+
+	first, err := LoadOrCreateCipher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := first.Encrypt("serverless-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected no disk directory to be created when CDT_MASTER_KEY is set, got err=%v", err)
+	}
+
+	t.Setenv("CDT_MASTER_KEY", base64.RawURLEncoding.EncodeToString(rawKey))
+	second, err := LoadOrCreateCipher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := second.Decrypt(encrypted)
+	if err != nil || plain != "serverless-secret" {
+		t.Fatalf("decrypt = %q, %v", plain, err)
 	}
 }

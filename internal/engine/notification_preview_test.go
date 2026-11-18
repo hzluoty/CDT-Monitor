@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/wang4386/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
 )
 
 func TestApplyNotificationPreviewKeepsStoredSecrets(t *testing.T) {

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/engine"
-	"github.com/wang4386/CDT-Monitor/internal/store"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/engine"
+	"github.com/hzluoty/CDT-Monitor/internal/store"
 )
 
 func TestSecurityHeadersAllowFaviconEndpoint(t *testing.T) {
@@ -298,5 +298,78 @@ func TestTriggerDailyReportEndpoint(t *testing.T) {
 	}
 	if job.Type != engine.JobDailyReport {
 		t.Fatalf("expected job type %s, got %s", engine.JobDailyReport, job.Type)
+	}
+}
+
+func TestPasskeySessionWorksAcrossServerlessInstancesAndPreventsReplay(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	credentialID := []byte("serverless-passkey-credential")
+	if err = st.SavePasskey(t.Context(), "Passkey", webauthn.Credential{ID: credentialID, PublicKey: []byte("test-key")}); err != nil {
+		t.Fatal(err)
+	}
+
+	instanceA := &Server{store: st, limits: make(map[string]*rateWindow), passkeys: make(map[string]passkeySession)}
+	instanceB := &Server{store: st, limits: make(map[string]*rateWindow), passkeys: make(map[string]passkeySession)}
+
+	req := httptest.NewRequest(http.MethodPost, "https://monitor.vercel.app/api/v1/auth/passkeys/begin", strings.NewReader(`{}`))
+	resp := httptest.NewRecorder()
+	instanceA.beginPasskeyLogin(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		SessionID string `json:"session_id"`
+	}
+	if err = json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	ceremony, ok := instanceB.takePasskeySession(t.Context(), payload.SessionID, "login")
+	if !ok || string(ceremony.session.UserID) != adminWebAuthnID {
+		t.Fatalf("expected instanceB to decode stateless passkey session, got ok=%v user=%q", ok, ceremony.session.UserID)
+	}
+	if _, ok := instanceB.takePasskeySession(t.Context(), payload.SessionID, "login"); ok {
+		t.Fatal("expected passkey session replay on instanceB to be rejected")
+	}
+	if _, ok := instanceA.takePasskeySession(t.Context(), payload.SessionID, "login"); ok {
+		t.Fatal("expected passkey session replay on instanceA to be rejected")
+	}
+}
+
+func TestSyncDrainCompletesMonitorJobsWithinRequest(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	config := domain.Config{
+		AdminPassword: "Strong-Password-42!", TrafficThreshold: 95, ShutdownMode: "KeepCharging", ThresholdAction: "stop_and_notify", APIInterval: 600, Timezone: "Asia/Shanghai",
+	}
+	if err = st.Setup(t.Context(), config); err != nil {
+		t.Fatal(err)
+	}
+	_, cronToken, err := st.CreateAPIKey(t.Context(), "vercel-cron", []string{"cron:run"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := engine.New(st, nil, nil, slog.Default(), 2)
+	server := New(st, eng, nil, slog.Default())
+	server.SetSyncDrain(true)
+
+	req := httptest.NewRequest(http.MethodGet, "https://monitor.vercel.app/monitor.php", nil)
+	req.Header.Set("Authorization", "Bearer "+cronToken)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	queued, err := st.CountQueuedJobs(t.Context())
+	if err != nil || queued != 0 {
+		t.Fatalf("expected 0 queued jobs after sync drain, got %d (err=%v)", queued, err)
 	}
 }

@@ -53,7 +53,7 @@ Go HTTP API ──► SQLite WAL 状态快照
 ```yaml
 services:
   cdt-monitor:
-    image: ghcr.io/wang4386/cdt-monitor:latest
+    image: ghcr.io/hzluoty/cdt-monitor:latest
     container_name: cdt-monitor
     restart: unless-stopped
     init: true
@@ -88,7 +88,7 @@ docker run -d \
   --restart unless-stopped \
   -p 43210:8080 \
   -v cdt-data:/data \
-  ghcr.io/wang4386/cdt-monitor:latest
+  ghcr.io/hzluoty/cdt-monitor:latest
 ```
 
 Docker Hub 用户也可以使用：
@@ -130,7 +130,27 @@ Windows：
 | `CDT_DATA_DIR` | `./data` | SQLite 和 `master.key` 所在目录 |
 | `CDT_LISTEN` | `:8080` | HTTP 监听地址 |
 | `CDT_WORKERS` | `4` | 后台任务并发数 |
+| `CDT_MASTER_KEY` | 空（回退文件） | 32 字节主密钥（支持 Base64 / Base64URL），Serverless 部署必填 |
+| `CDT_DATABASE_URL` | 空（回退本地 SQLite） | 远程 libSQL / Turso 连接串（如 `libsql://xxx.turso.io?authToken=yyy`），也兼容 `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` |
 | `TZ` | 系统时区 | 容器环境时区；业务时区以控制台设置为准 |
+
+## Vercel Serverless 部署
+
+项目内置 `api/index.go` 与 `vercel.json`，支持通过 Vercel + Turso (libSQL) 全栈无状态部署：
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fhzluoty%2FCDT-Monitor&env=CDT_MASTER_KEY,CDT_DATABASE_URL,TZ&envDescription=Configure%2032-byte%20master%20key%20and%20Turso%20libSQL%20database%20URL)
+
+1. 创建免费的 [Turso](https://turso.tech/) 数据库，获取 `libsql://...` 数据库地址与 Auth Token。
+2. 在 Vercel 导入仓库 `https://github.com/hzluoty/CDT-Monitor`，配置以下环境变量：
+   - `CDT_MASTER_KEY`：运行 `openssl rand -base64 32` 生成一串 32 字节 Base64 密钥。
+   - `CDT_DATABASE_URL`：`libsql://<db-name>.turso.io?authToken=<token>`（或分别配置 `TURSO_DATABASE_URL` 与 `TURSO_AUTH_TOKEN`）。
+   - `TZ`：`Asia/Shanghai`。
+3. 部署完成后访问 Vercel 域名完成初始化向导，在 **设置 → API Key** 中创建一个勾选 `cron:run` 权限的 API Key。
+4. 使用外部定时服务（如 `cron-job.org`、Upstash QStash 或 GitHub Actions）每 1～5 分钟请求一次：
+   ```text
+   GET https://<你的域名>.vercel.app/monitor.php?key=<你的_API_Key>
+   ```
+   （也支持使用请求头 `Authorization: Bearer <你的_API_Key>` 触发）。
 
 ## 从 PHP 版本升级
 
@@ -199,7 +219,7 @@ GET /monitor.php?key=<具有 cron:run scope 的 API Key>
 
 ## 相关链接
 
-- 项目主页：[GitHub](https://github.com/wang4386/CDT-Monitor)
+- 项目主页：[GitHub](https://github.com/hzluoty/CDT-Monitor)
 - 作者博客：[qninq.cn](https://qninq.cn)
 - 技术社区：[NodeSeek](https://www.nodeseek.com/) · [Linux.do](https://linux.do/)
 
@@ -237,8 +257,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o cdt-monitor ./cmd/cdt-monit
 
 镜像标签：
 
-- `dev` 分支：`ghcr.io/wang4386/cdt-monitor:dev`、`qninq/cdt-monitor:dev`
-- `main` 分支：`ghcr.io/wang4386/cdt-monitor:latest`、`qninq/cdt-monitor:latest`
+- `dev` 分支：`ghcr.io/hzluoty/cdt-monitor:dev`、`qninq/cdt-monitor:dev`
+- `main` 分支：`ghcr.io/hzluoty/cdt-monitor:latest`、`qninq/cdt-monitor:latest`
 - Release：两个仓库均发布 `v2.x.x`、`2.x.x` 与 `2.x` 标签
 
 ## 安全建议

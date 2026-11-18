@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/security"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/security"
 	_ "modernc.org/sqlite"
 )
 
@@ -662,5 +664,44 @@ func TestTraffic24HoursAgoDoesNotUseCurrentDayDailySampleNearMidnight(t *testing
 	traffic, ok := st.Traffic24HoursAgo(ctx, 202, now)
 	if !ok || traffic != 10.0 {
 		t.Fatalf("expected previous day's baseline 10.0, got %v (ok=%v)", traffic, ok)
+	}
+}
+
+func TestResolveDatabaseConfigSupportsTursoAndEnv(t *testing.T) {
+	t.Setenv("TURSO_DATABASE_URL", "libsql://cdt-monitor-test.turso.io")
+	t.Setenv("TURSO_AUTH_TOKEN", "secret-token")
+
+	driver, dsn, external := resolveDatabaseConfig("/unused")
+	if driver != "libsql" || !external || dsn != "libsql://cdt-monitor-test.turso.io?authToken=secret-token" {
+		t.Fatalf("unexpected turso config: driver=%q dsn=%q external=%v", driver, dsn, external)
+	}
+
+	t.Setenv("CDT_DATABASE_URL", "https://custom.turso.io?tls=true")
+	t.Setenv("CDT_DATABASE_AUTH_TOKEN", "custom-token")
+	driver, dsn, external = resolveDatabaseConfig("/unused")
+	if driver != "libsql" || !external || dsn != "https://custom.turso.io?tls=true&authToken=custom-token" {
+		t.Fatalf("unexpected custom config: driver=%q dsn=%q external=%v", driver, dsn, external)
+	}
+}
+
+func TestOpenWithEnvDatabaseURLAndMasterKeyDoesNotCreateDataDir(t *testing.T) {
+	dbDir := t.TempDir()
+	dbFile := filepath.Join(dbDir, "remote-sim.sqlite")
+	nonexistentDataDir := filepath.Join(t.TempDir(), "should-not-exist")
+
+	t.Setenv("CDT_MASTER_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("CDT_DATABASE_URL", dbFile)
+
+	st, err := Open(nonexistentDataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if _, err := os.Stat(nonexistentDataDir); !os.IsNotExist(err) {
+		t.Fatalf("expected dataDir not to be created when env key and db URL are provided, err=%v", err)
+	}
+	if err := st.Ready(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

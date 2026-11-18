@@ -21,11 +21,11 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
-	"github.com/wang4386/CDT-Monitor/internal/domain"
-	"github.com/wang4386/CDT-Monitor/internal/engine"
-	"github.com/wang4386/CDT-Monitor/internal/scheduler"
-	"github.com/wang4386/CDT-Monitor/internal/security"
-	"github.com/wang4386/CDT-Monitor/internal/store"
+	"github.com/hzluoty/CDT-Monitor/internal/domain"
+	"github.com/hzluoty/CDT-Monitor/internal/engine"
+	"github.com/hzluoty/CDT-Monitor/internal/scheduler"
+	"github.com/hzluoty/CDT-Monitor/internal/security"
+	"github.com/hzluoty/CDT-Monitor/internal/store"
 )
 
 type principal struct {
@@ -39,15 +39,16 @@ type contextKey string
 const principalKey contextKey = "principal"
 
 type Server struct {
-	store    *store.Store
-	engine   *engine.Engine
-	logger   *slog.Logger
-	assets   fs.FS
-	handler  http.Handler
-	mu       sync.Mutex
-	limits   map[string]*rateWindow
-	passkeys map[string]passkeySession
-	build    BuildInfo
+	store     *store.Store
+	engine    *engine.Engine
+	logger    *slog.Logger
+	assets    fs.FS
+	handler   http.Handler
+	mu        sync.Mutex
+	limits    map[string]*rateWindow
+	passkeys  map[string]passkeySession
+	build     BuildInfo
+	syncDrain bool
 }
 
 type BuildInfo struct {
@@ -117,6 +118,36 @@ func New(st *store.Store, eng *engine.Engine, assets fs.FS, logger *slog.Logger,
 
 func (s *Server) Handler() http.Handler { return s.handler }
 
+func (s *Server) SetSyncDrain(enabled bool) { s.syncDrain = enabled }
+
+func (s *Server) drainJobIfNeeded(ctx context.Context, job domain.Job) domain.Job {
+	if !s.syncDrain || s.engine == nil {
+		return job
+	}
+	s.engine.DrainSync(ctx)
+	if s.store != nil {
+		if updated, err := s.store.GetJob(ctx, job.ID); err == nil {
+			return updated
+		}
+	}
+	return job
+}
+
+func (s *Server) drainJobsIfNeeded(ctx context.Context, jobs []domain.Job) []domain.Job {
+	if !s.syncDrain || s.engine == nil {
+		return jobs
+	}
+	s.engine.DrainSync(ctx)
+	if s.store != nil {
+		for i := range jobs {
+			if updated, err := s.store.GetJob(ctx, jobs[i].ID); err == nil {
+				jobs[i] = updated
+			}
+		}
+	}
+	return jobs
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
@@ -143,8 +174,8 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"version":     s.build.Version,
 		"commit":      s.build.Commit,
 		"built_at":    s.build.BuiltAt,
-		"repository":  "https://github.com/wang4386/CDT-Monitor",
-		"release_url": "https://github.com/wang4386/CDT-Monitor/releases",
+		"repository":  "https://github.com/hzluoty/CDT-Monitor",
+		"release_url": "https://github.com/hzluoty/CDT-Monitor/releases",
 	}
 	if r.URL.Query().Get("check") == "1" {
 		latest, err := latestRelease(r.Context(), s.build.Version)
@@ -302,12 +333,11 @@ func (s *Server) beginPasskeyRegistration(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "passkey_failed", err.Error())
 		return
 	}
-	id, err := security.NewToken(24)
+	id, err := s.createPasskeySession(passkeySession{kind: "registration", name: strings.TrimSpace(request.Name), session: *session, expires: time.Now().Add(5 * time.Minute)})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "passkey_failed", "无法创建 Passkey 挑战")
 		return
 	}
-	s.savePasskeySession(id, passkeySession{kind: "registration", name: strings.TrimSpace(request.Name), session: *session, expires: time.Now().Add(5 * time.Minute)})
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": id, "public_key": creation})
 }
 
@@ -316,7 +346,7 @@ func (s *Server) completePasskeyRegistration(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "https_required", "Passkey 只能在 HTTPS 安全上下文中创建")
 		return
 	}
-	ceremony, ok := s.takePasskeySession(r.URL.Query().Get("session_id"), "registration")
+	ceremony, ok := s.takePasskeySession(r.Context(), r.URL.Query().Get("session_id"), "registration")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "passkey_session_expired", "Passkey 挑战已过期，请重新开始")
 		return
@@ -364,12 +394,11 @@ func (s *Server) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "passkey_failed", err.Error())
 		return
 	}
-	id, err := security.NewToken(24)
+	id, err := s.createPasskeySession(passkeySession{kind: "login", session: *session, expires: time.Now().Add(5 * time.Minute)})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "passkey_failed", "无法创建 Passkey 挑战")
 		return
 	}
-	s.savePasskeySession(id, passkeySession{kind: "login", session: *session, expires: time.Now().Add(5 * time.Minute)})
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": id, "public_key": assertion})
 }
 
@@ -378,7 +407,7 @@ func (s *Server) completePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "https_required", "Passkey 登录只能在 HTTPS 安全上下文中使用")
 		return
 	}
-	ceremony, ok := s.takePasskeySession(r.URL.Query().Get("session_id"), "login")
+	ceremony, ok := s.takePasskeySession(r.Context(), r.URL.Query().Get("session_id"), "login")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "passkey_session_expired", "Passkey 挑战已过期，请重新开始")
 		return
@@ -452,9 +481,44 @@ func requestOrigin(r *http.Request) string {
 	return scheme + "://" + host
 }
 
+type encodedPasskeySession struct {
+	Kind    string               `json:"kind"`
+	Name    string               `json:"name,omitempty"`
+	Session webauthn.SessionData `json:"session"`
+	Expires time.Time            `json:"expires"`
+	Nonce   string               `json:"nonce"`
+}
+
+func (s *Server) createPasskeySession(session passkeySession) (string, error) {
+	nonce, err := security.NewToken(24)
+	if err != nil {
+		return "", err
+	}
+	id := nonce
+	if s.store != nil {
+		raw, marshalErr := json.Marshal(encodedPasskeySession{
+			Kind:    session.kind,
+			Name:    session.name,
+			Session: session.session,
+			Expires: session.expires,
+			Nonce:   nonce,
+		})
+		if marshalErr == nil {
+			if encrypted, encErr := s.store.Encrypt(string(raw)); encErr == nil {
+				id = strings.TrimPrefix(encrypted, "enc:v1:")
+			}
+		}
+	}
+	s.savePasskeySession(id, session)
+	return id, nil
+}
+
 func (s *Server) savePasskeySession(id string, session passkeySession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.passkeys == nil {
+		s.passkeys = make(map[string]passkeySession)
+	}
 	now := time.Now()
 	for key, item := range s.passkeys {
 		if item.expires.Before(now) {
@@ -464,20 +528,56 @@ func (s *Server) savePasskeySession(id string, session passkeySession) {
 	s.passkeys[id] = session
 }
 
-func (s *Server) takePasskeySession(id, kind string) (passkeySession, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	session, ok := s.passkeys[id]
-	if !ok || session.kind != kind || session.expires.Before(time.Now()) {
-		delete(s.passkeys, id)
+func (s *Server) takePasskeySession(ctx context.Context, id, kind string) (passkeySession, bool) {
+	if id == "" {
 		return passkeySession{}, false
 	}
+	s.mu.Lock()
+	session, ok := s.passkeys[id]
 	delete(s.passkeys, id)
-	return session, true
+	s.mu.Unlock()
+
+	now := time.Now()
+	if ok {
+		if session.kind != kind || session.expires.Before(now) {
+			return passkeySession{}, false
+		}
+		if s.store != nil {
+			if fresh, err := s.store.RecordActionEvent(ctx, "passkey:"+security.TokenHash(id), 0, "passkey", "used", ""); err == nil && !fresh {
+				return passkeySession{}, false
+			}
+		}
+		return session, true
+	}
+
+	if s.store == nil {
+		return passkeySession{}, false
+	}
+	plain, err := s.store.Decrypt("enc:v1:" + strings.TrimPrefix(id, "enc:v1:"))
+	if err != nil {
+		return passkeySession{}, false
+	}
+	var decoded encodedPasskeySession
+	if err := json.Unmarshal([]byte(plain), &decoded); err != nil {
+		return passkeySession{}, false
+	}
+	if decoded.Kind != kind || decoded.Expires.Before(now) {
+		return passkeySession{}, false
+	}
+	fresh, err := s.store.RecordActionEvent(ctx, "passkey:"+security.TokenHash(id), 0, "passkey", "used", "")
+	if err != nil || !fresh {
+		return passkeySession{}, false
+	}
+	return passkeySession{
+		kind:    decoded.Kind,
+		name:    decoded.Name,
+		session: decoded.Session,
+		expires: decoded.Expires,
+	}, true
 }
 
 func latestRelease(ctx context.Context, version string) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/wang4386/CDT-Monitor/releases/latest", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/hzluoty/CDT-Monitor/releases/latest", nil)
 	if err != nil {
 		return "", err
 	}
@@ -626,6 +726,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
 		return
 	}
+	job = s.drainJobIfNeeded(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -635,6 +736,7 @@ func (s *Server) refreshAll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
 		return
 	}
+	jobs = s.drainJobsIfNeeded(r.Context(), jobs)
 	writeJSON(w, http.StatusAccepted, map[string]any{"jobs": jobs})
 }
 
@@ -653,6 +755,7 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
 		return
 	}
+	job = s.drainJobIfNeeded(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -716,6 +819,7 @@ func (s *Server) testNotification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
 		return
 	}
+	job = s.drainJobIfNeeded(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -766,7 +870,11 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) legacyMonitor(w http.ResponseWriter, r *http.Request) {
-	scopes, err := s.store.ValidateAPIKey(r.Context(), r.URL.Query().Get("key"))
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		key = bearerToken(r)
+	}
+	scopes, err := s.store.ValidateAPIKey(r.Context(), key)
 	if err != nil || !contains(scopes, "cron:run") {
 		writeError(w, http.StatusUnauthorized, "invalid_key", "需要具有 cron:run 权限的 API Key")
 		return
@@ -778,6 +886,12 @@ func (s *Server) legacyMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusConflict, "monitor_busy", err.Error())
 		return
+	}
+	if s.syncDrain {
+		s.engine.DrainSync(r.Context())
+		if s.store != nil && time.Now().Minute()%30 == 0 {
+			_ = s.store.Prune(r.Context())
+		}
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
 }
@@ -1254,5 +1368,6 @@ func (s *Server) triggerDailyReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue_failed", err.Error())
 		return
 	}
+	job = s.drainJobIfNeeded(r.Context(), job)
 	writeJSON(w, http.StatusAccepted, job)
 }
