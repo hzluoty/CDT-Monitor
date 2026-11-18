@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
@@ -48,10 +51,9 @@ func Open(dataDir string) (*Store, error) {
 			}
 		}
 	} else {
+		installLibSQLRetryTransport()
 		db.SetMaxOpenConns(4)
-		db.SetMaxIdleConns(2)
-		db.SetConnMaxIdleTime(15 * time.Second)
-		db.SetConnMaxLifetime(2 * time.Minute)
+		db.SetMaxIdleConns(0)
 	}
 
 	var cipher *security.Cipher
@@ -146,6 +148,49 @@ func resolveDatabaseConfig(dataDir string) (driver string, dsn string, externalD
 		}
 	}
 	return "sqlite", rawURL, true
+}
+
+var libsqlTransportOnce sync.Once
+
+type libsqlRetryTransport struct {
+	base http.RoundTripper
+}
+
+func (t *libsqlRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil && req.GetBody != nil && strings.HasSuffix(req.URL.Path, "/v2/pipeline") && isTransientEOF(err) {
+		if body, bodyErr := req.GetBody(); bodyErr == nil {
+			cloned := req.Clone(req.Context())
+			cloned.Body = body
+			cloned.Close = true
+			return t.base.RoundTrip(cloned)
+		}
+	}
+	return resp, err
+}
+
+func isTransientEOF(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "EOF") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe")
+}
+
+func installLibSQLRetryTransport() {
+	libsqlTransportOnce.Do(func() {
+		base := http.DefaultClient.Transport
+		if base == nil {
+			if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+				cloned := dt.Clone()
+				cloned.IdleConnTimeout = 10 * time.Second
+				base = cloned
+			} else {
+				base = http.DefaultTransport
+			}
+		}
+		http.DefaultClient.Transport = &libsqlRetryTransport{base: base}
+	})
 }
 
 func execStatements(ctx context.Context, db *sql.DB, script string) error {
